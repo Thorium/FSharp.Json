@@ -64,7 +64,7 @@ module Serializer =
         ()
         
 [<AbstractClass>]
-[<MarkdownExporter; CsvMeasurementsExporter; HtmlExporter; RPlotExporter>]
+[<MarkdownExporter; CsvMeasurementsExporter; HtmlExporter; RPlotExporter; MemoryDiagnoser>]
 type RoundtripBenchmark<'T>(value : 'T) =
     let nsj = new JsonDotNetSerializer()
     let jfs = new FSharpJsonSerializer()
