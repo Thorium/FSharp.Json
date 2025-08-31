@@ -8,10 +8,36 @@ module Union =
     }
 
     type TheUnion =
+    | NoFieldCase
     | OneFieldCase of string
     | ManyFieldsCase of string*int
     | RecordCase of TheRecord
+        
+    type OtherRecord = {
+        Union: TheUnion
+    }
+        
+    [<Test>]
+    let ``No field case serialization`` () =
+        let value = NoFieldCase
+        let actual = Json.serializeU value
+        let expected = "\"NoFieldCase\""
+        Assert.AreEqual(expected, actual)
 
+    [<Test>]
+    let ``No field case serialization in record`` () =
+        let value = { OtherRecord.Union = NoFieldCase }
+        let actual = Json.serializeU value
+        let expected = """{"Union":"NoFieldCase"}"""
+        Assert.AreEqual(expected, actual)
+
+    [<Test>]
+    let ``Union no field case deserialization`` () =
+        let expected = { OtherRecord.Union = NoFieldCase }
+        let json = Json.serialize(expected)
+        let actual = Json.deserialize<OtherRecord> json
+        Assert.AreEqual(expected, actual)
+        
     [<Test>]
     let ``Union one field case serialization`` () =
         let value = OneFieldCase "The string"
@@ -78,6 +104,13 @@ module Union =
         Assert.AreEqual(expected, actual)
 
     [<Test>]
+    let ``Union key-value deserialization (more than 2 fields)`` () =
+        let expected = TheAnnotatedUnion.StringCase "The string"
+        let json = """{"casekey":"StringCase","casevalue":"The string","unrelated_property":"unrelated_value"}"""
+        let actual = Json.deserialize<TheAnnotatedUnion> json
+        Assert.AreEqual(expected, actual)
+
+    [<Test>]
     let ``Union cases serialization with snake case naming`` () =
         let value = OneFieldCase "The string"
         let config = JsonConfig.create(unformatted = true, jsonFieldNaming = Json.snakeCase)
@@ -93,6 +126,25 @@ module Union =
         let actual = Json.deserializeEx<TheUnion> config json
         Assert.AreEqual(expected, actual)
 
+    [<JsonUnion(Mode = UnionMode.CaseKeyDiscriminatorField, CaseKeyField="discriminator")>]
+    type TheDiscriminatorUnion =
+    | StringCase of string
+    | RecordCase of TheRecord
+
+    [<Test>]
+    let ``Union discriminator record case serialization`` () =
+        let value = TheDiscriminatorUnion.RecordCase {TheRecord.Value = "The string"}
+        let actual = Json.serializeU value
+        let expected = """{"discriminator":"RecordCase","Value":"The string"}"""
+        Assert.AreEqual(expected, actual)
+
+    [<Test>]
+    let ``Union discriminator record case deserialization`` () =
+        let expected = TheDiscriminatorUnion.RecordCase {TheRecord.Value = "The string"}
+        let json = Json.serialize(expected)
+        let actual = Json.deserialize<TheDiscriminatorUnion> json
+        Assert.AreEqual(expected, actual)
+            
     type SingleCaseUnion = SingleCase of string
 
     type SingleCaseRecord = {

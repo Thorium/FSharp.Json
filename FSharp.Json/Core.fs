@@ -58,7 +58,7 @@ module internal Core =
         | converterType ->
             let transform = getTransform converterType
             let value = transform.toTargetType value
-            let valueType = value.GetType()
+            let valueType = getType value
             (valueType, value)
 
     let getEnumMode (config: JsonConfig) (jsonField: JsonField) =
@@ -86,19 +86,19 @@ module internal Core =
                     let enumValue = decimal (value :?> byte)
                     JsonValue.Number enumValue
                 | t when t = typeof<char> ->
-                    let enumValue = sprintf "%c" (value :?> char)
+                    let enumValue = $"%c{value :?> char}"
                     JsonValue.String enumValue
             | EnumMode.Name ->
                 let strvalue = Enum.GetName(t, value)
                 JsonValue.String strvalue
-            | mode -> failSerialization <| sprintf "Failed to serialize enum %s, unsupported enum mode: %A" t.Name mode
+            | mode -> failSerialization $"Failed to serialize enum %s{t.Name}, unsupported enum mode: %A{mode}"
 
         let getUntypedType (t: Type) (value: obj): Type =
             if t = typeof<obj> then
                 if config.allowUntyped then
-                    value.GetType()
+                    getType value
                 else
-                    failSerialization <| "Failed to serialize untyped data, allowUntyped set to false"
+                    failSerialization "Failed to serialize untyped data, allowUntyped set to false"
             else t
 
         let serializeNonOption (t: Type) (jsonField: JsonField) (value: obj): JsonValue =
@@ -107,6 +107,8 @@ module internal Core =
                 let t, value = transformToTargetType t value jsonField.Transform
                 let t = getUntypedType t value
                 match t with
+                | t when t = typeof<unit> ->
+                    JsonValue.Null
                 | t when t = typeof<uint16> ->
                     JsonValue.Number (decimal (value :?> uint16))
                 | t when t = typeof<int16> ->
@@ -141,13 +143,15 @@ module internal Core =
                     JsonValue.String ((value :?> DateTime).ToString(jsonField.DateTimeFormat))
                 | t when t = typeof<DateTimeOffset> ->
                     JsonValue.String ((value :?> DateTimeOffset).ToString(jsonField.DateTimeFormat))
+                | t when t = typeof<TimeSpan> ->
+                    JsonValue.String ((value :?> TimeSpan).ToString())                    
                 | t when t = typeof<Guid> ->
-                    JsonValue.String ((value :?> Guid).ToString())
+                    JsonValue.String ((value :?> Guid).ToString())                                    
                 | t when t.IsEnum ->
                     serializeEnum t jsonField value
                 | t when isTuple t || isList t || isArray t || isMap t || isRecord t || isUnion t ->
                     serialize config t value
-                | _ -> failSerialization <| sprintf "Unknown type: %s" t.Name
+                | _ -> failSerialization $"Unknown type: %s{t.Name}"
             | true ->
                 let value = value :?> string
                 try
@@ -189,7 +193,7 @@ module internal Core =
             let items =
                 values.Cast<Object>()
                 |> Seq.map (fun value -> 
-                    serializeUnwrapOption (value.GetType()) JsonField.Default value)
+                    serializeUnwrapOption (getType value) JsonField.Default value)
                 |> Seq.map (Option.defaultValue JsonValue.Null)
             items |> Array.ofSeq |> JsonValue.Array
 
@@ -208,8 +212,8 @@ module internal Core =
                 |> Seq.map (fun kvp ->
                     let key = KvpKey kvp :?> string
                     let value = KvpValue kvp
-                    let jvalue = serializeUnwrapOption (value.GetType()) JsonField.Default value
-                    (key, Option.defaultValue JsonValue.Null jvalue)
+                    let jValue = serializeUnwrapOption (getType value) JsonField.Default value
+                    (key, Option.defaultValue JsonValue.Null jValue)
                 )
             props|> Array.ofSeq |> JsonValue.Record
 
@@ -220,30 +224,39 @@ module internal Core =
 
         let serializeUnion (t: Type) (theunion: obj): JsonValue =
             let caseInfo, values = FSharpValue.GetUnionFields(theunion, t)
-            let jsonField = getJsonFieldUnionCase caseInfo
-            let types = caseInfo.GetFields() |> Array.map (fun p -> p.PropertyType)
-            let jvalue =
-                match values.Length with
-                | 1 ->
-                    let caseValue = values.[0]
-                    let caseType = types.[0]
-                    serializeUnwrapOptionWithNull caseType jsonField caseValue
-                | _ ->
-                    serializeTupleItems types values
-            let unionCases = getUnionCases caseInfo.DeclaringType
-            match unionCases.Length with
-            | 1 -> jvalue
+            let jsonUnionCase = getJsonUnionCase caseInfo
+            let jsonUnion = getJsonUnion caseInfo.DeclaringType
+            let theCase = getJsonUnionCaseName config jsonUnion jsonUnionCase caseInfo
+
+            match values.Length with
+            | 0 -> JsonValue.String theCase
             | _ ->
-                let jsonUnionCase = getJsonUnionCase caseInfo
-                let jsonUnion = getJsonUnion caseInfo.DeclaringType
-                let theCase = getJsonUnionCaseName config jsonUnion jsonUnionCase caseInfo
-                match jsonUnion.Mode with
-                | UnionMode.CaseKeyAsFieldName -> JsonValue.Record [| (theCase, jvalue) |]
-                | UnionMode.CaseKeyAsFieldValue ->
-                    let jkey = (jsonUnion.CaseKeyField, JsonValue.String theCase)
-                    let jvalue = (jsonUnion.CaseValueField, jvalue)
-                    JsonValue.Record [| jkey; jvalue |]
-                | mode -> failSerialization <| sprintf "Failed to serialize union, unsupported union mode: %A" mode
+                let jsonField = getJsonFieldUnionCase caseInfo
+                let types = caseInfo.GetFields() |> Array.map (fun p -> p.PropertyType)
+                let jValue =
+                    match values.Length with
+                    | 1 ->
+                        let caseValue = values.[0]
+                        let caseType = types.[0]
+                        serializeUnwrapOptionWithNull caseType jsonField caseValue
+                    | _ ->
+                        serializeTupleItems types values
+                let unionCases = getUnionCases caseInfo.DeclaringType
+                match unionCases.Length with
+                | 1 -> jValue
+                | _ ->
+                    match jsonUnion.Mode with
+                    | UnionMode.CaseKeyAsFieldName -> JsonValue.Record [| (theCase, jValue) |]
+                    | UnionMode.CaseKeyAsFieldValue ->
+                        let jKey = (jsonUnion.CaseKeyField, JsonValue.String theCase)
+                        let jValue = (jsonUnion.CaseValueField, jValue)
+                        JsonValue.Record [| jKey; jValue |]
+                    | UnionMode.CaseKeyDiscriminatorField ->
+                        match jValue with
+                        | JsonValue.Record jRecord ->
+                            JsonValue.Record (Array.append [| (jsonUnion.CaseKeyField, JsonValue.String theCase) |] jRecord)
+                        | _ -> failSerialization $"Failed to serialize union, union mode %A{jsonUnion.Mode} supports only objects as discriminated field could exist only in object"
+                    | mode -> failSerialization $"Failed to serialize union, unsupported union mode: %A{mode}"
 
         match t with
         | t when isRecord t -> serializeRecord t value
@@ -253,12 +266,12 @@ module internal Core =
         | t when isTuple t -> serializeTupleItems (getTupleElements t) (FSharpValue.GetTupleFields value)
         | t when isUnion t -> serializeUnion t value
         | t ->
-            let msg = sprintf "Failed to serialize, must be one of following types: record, map, array, list, tuple, union. Type is: %s." t.Name
+            let msg = $"Failed to serialize, must be one of following types: record, map, array, list, tuple, union. Type is: %s{t.Name}."
             failSerialization msg 
     
     let failDeserialization (path: JsonPath) (message: string) =
-        let message = sprintf "JSON Path: %s. %s" (path.toString()) message
-        raise (new JsonDeserializationError(path, message))
+        let message = $"JSON Path: %s{path.toString()}. %s{message}"
+        raise (JsonDeserializationError(path, message))
                
     let getTargetType (t: Type) (jsonField: JsonField): Type =
         match jsonField.Transform with
@@ -280,89 +293,91 @@ module internal Core =
         | JsonValue.Boolean _ -> typeof<bool>
         | _ -> null
                 
-    let rec deserialize (config: JsonConfig) (path: JsonPath) (t: Type) (jvalue: JsonValue): obj =
-        let deserializeEnum (path: JsonPath) (t: Type) (jsonField: JsonField) (jvalue: JsonValue): obj =
+    let rec deserialize (config: JsonConfig) (path: JsonPath) (t: Type) (jValue: JsonValue): obj =
+        let deserializeEnum (path: JsonPath) (t: Type) (jsonField: JsonField) (jValue: JsonValue): obj =
             let baseT = Enum.GetUnderlyingType t
             let enumMode = getEnumMode config jsonField
             match enumMode with
             | EnumMode.Value ->
                 match baseT with
                 | baseT when baseT = typeof<int> ->
-                    let enumValue = JsonValueHelpers.getInt path jvalue
+                    let enumValue = JsonValueHelpers.getInt path jValue
                     Enum.ToObject(t, enumValue)
                 | baseT when baseT = typeof<byte> ->
-                    let enumValue = JsonValueHelpers.getByte path jvalue
+                    let enumValue = JsonValueHelpers.getByte path jValue
                     Enum.ToObject(t, enumValue)
                 | baseT when baseT = typeof<char> ->
-                    let enumValue = JsonValueHelpers.getChar path jvalue
+                    let enumValue = JsonValueHelpers.getChar path jValue
                     Enum.ToObject(t, enumValue)
             | EnumMode.Name ->
-                let valueStr = JsonValueHelpers.getString path jvalue
+                let valueStr = JsonValueHelpers.getString path jValue
                 Enum.Parse(t, valueStr)
-            | mode -> failDeserialization path <| sprintf "Failed to deserialize enum %s, unsupported enum mode: %A" t.Name mode
+            | mode -> failDeserialization path <| $"Failed to deserialize enum %s{t.Name}, unsupported enum mode: %A{mode}"
 
-        let getUntypedType (path: JsonPath) (t: Type) (jvalue: JsonValue): Type =
+        let getUntypedType (path: JsonPath) (t: Type) (jValue: JsonValue): Type =
             match t with
             | t when t = typeof<obj> ->
                 if config.allowUntyped then
-                    getJsonValueType jvalue
+                    getJsonValueType jValue
                 else
                     failDeserialization path <| sprintf "Failed to deserialize object, allowUntyped set to false"
             | t -> t 
 
-        let deserializeNonOption (path: JsonPath) (t: Type) (jsonField: JsonField) (jvalue: JsonValue): obj =
+        let deserializeNonOption (path: JsonPath) (t: Type) (jsonField: JsonField) (jValue: JsonValue): obj =
             match jsonField.AsJson with
             | true ->
-                match jvalue with
-                | JsonValue.String strvalue -> strvalue :> obj
-                | _ -> jvalue.ToString(JsonSaveOptions.DisableFormatting) :> obj
+                match jValue with
+                | JsonValue.String strValue -> strValue :> obj
+                | _ -> jValue.ToString(JsonSaveOptions.DisableFormatting) :> obj
             | false ->
                 let t = getTargetType t jsonField
-                let t = getUntypedType path t jvalue
-                let jvalue =
+                let t = getUntypedType path t jValue
+                let jValue =
                     match t with
                     | t when t = typeof<int16> ->
-                        JsonValueHelpers.getInt16 path jvalue :> obj
+                        JsonValueHelpers.getInt16 path jValue :> obj
                     | t when t = typeof<uint16> ->
-                        JsonValueHelpers.getUInt16 path jvalue :> obj
+                        JsonValueHelpers.getUInt16 path jValue :> obj
                     | t when t = typeof<int> ->
-                        JsonValueHelpers.getInt path jvalue :> obj
+                        JsonValueHelpers.getInt path jValue :> obj
                     | t when t = typeof<uint32> ->
-                        JsonValueHelpers.getUInt32 path jvalue :> obj
+                        JsonValueHelpers.getUInt32 path jValue :> obj
                     | t when t = typeof<int64> ->
-                        JsonValueHelpers.getInt64 path jvalue :> obj
+                        JsonValueHelpers.getInt64 path jValue :> obj
                     | t when t = typeof<uint64> ->
-                        JsonValueHelpers.getUInt64 path jvalue :> obj
+                        JsonValueHelpers.getUInt64 path jValue :> obj
                     | t when t = typeof<bigint> ->
-                        JsonValueHelpers.getBigint path jvalue :> obj
+                        JsonValueHelpers.getBigint path jValue :> obj
                     | t when t = typeof<single> ->
-                        JsonValueHelpers.getSingle path jvalue :> obj
+                        JsonValueHelpers.getSingle path jValue :> obj
                     | t when t = typeof<float> ->
-                        JsonValueHelpers.getFloat path jvalue :> obj
+                        JsonValueHelpers.getFloat path jValue :> obj
                     | t when t = typeof<decimal> ->
-                        JsonValueHelpers.getDecimal path jvalue :> obj
+                        JsonValueHelpers.getDecimal path jValue :> obj
                     | t when t = typeof<byte> ->
-                        JsonValueHelpers.getByte path jvalue :> obj
+                        JsonValueHelpers.getByte path jValue :> obj
                     | t when t = typeof<sbyte> ->
-                        JsonValueHelpers.getSByte path jvalue :> obj
+                        JsonValueHelpers.getSByte path jValue :> obj
                     | t when t = typeof<bool> ->
-                        JsonValueHelpers.getBool path jvalue :> obj
+                        JsonValueHelpers.getBool path jValue :> obj
                     | t when t = typeof<string> ->
-                        JsonValueHelpers.getString path jvalue :> obj
+                        JsonValueHelpers.getString path jValue :> obj
                     | t when t = typeof<char> ->
-                        JsonValueHelpers.getChar path jvalue :> obj
+                        JsonValueHelpers.getChar path jValue :> obj
                     | t when t = typeof<DateTime> ->
-                        JsonValueHelpers.getDateTime CultureInfo.InvariantCulture path jvalue :> obj
+                        JsonValueHelpers.getDateTime CultureInfo.InvariantCulture path jValue :> obj
                     | t when t = typeof<DateTimeOffset> ->
-                        JsonValueHelpers.getDateTimeOffset CultureInfo.InvariantCulture path jvalue :> obj
+                        JsonValueHelpers.getDateTimeOffset CultureInfo.InvariantCulture path jValue :> obj
+                    | t when t = typeof<TimeSpan> ->
+                        JsonValueHelpers.getTimeSpan path jValue :> obj                        
                     | t when t = typeof<Guid> ->
-                        JsonValueHelpers.getGuid path jvalue :> obj
+                        JsonValueHelpers.getGuid path jValue :> obj                                            
                     | t when t.IsEnum ->
-                        deserializeEnum path t jsonField jvalue
+                        deserializeEnum path t jsonField jValue
                     | t when isTuple t || isList t || isArray t || isMap t || isRecord t || isUnion t ->
-                        deserialize config path t jvalue
-                    | _ -> failDeserialization path <| sprintf "Not supported type: %s" t.Name
-                transformFromTargetType jsonField.Transform jvalue
+                        deserialize config path t jValue
+                    | _ -> failDeserialization path $"Not supported type: %s{t.Name}"
+                transformFromTargetType jsonField.Transform jValue
 
         let deserializeUnwrapOption (path: JsonPath) (t: Type) (jsonField: JsonField) (jvalue: JsonValue option): obj =
             match t with
@@ -459,76 +474,80 @@ module internal Core =
                 FSharpValue.MakeRecord(t, propsValues)
             | _ -> failDeserialization path "Failed to parse record from JSON that is not object."
 
-        let deserializeUnion (path: JsonPath) (t: Type) (jvalue: JsonValue): obj =
-            let jsonUnion = getJsonUnion t
+        let getUnionCaseInfo (path: JsonPath) (t: Type) (jCaseName: string): UnionCaseInfo =
+            let jsonUnion = t |> getJsonUnion
             let unionCases = t |> getUnionCases
-            match unionCases.Length with
-            | 1 ->
-                let caseInfo = unionCases.[0]
+            let caseInfo = unionCases |> Array.tryFind (fun c -> getJsonUnionCaseName config jsonUnion (getJsonUnionCase c) c = jCaseName)
+            match caseInfo with
+            | Some caseInfo -> caseInfo
+            | None -> failDeserialization path $"Failed to parse union, unable to find union case: %s{jCaseName}."
+        
+        let mustFindField (path: JsonPath) (fieldName: string) (fields: (string * JsonValue)[]): string * JsonValue =
+            let caseKeyField = fields |> Seq.tryFind (fun f -> fst f = fieldName)
+            match caseKeyField with
+            | Some field -> field
+            | None -> failDeserialization path $"Failed to parse union, unable to find field: %s{fieldName}."
+
+        let makeUnion (path: JsonPath) (t: Type) (jCaseName: string) (jCaseValue: JsonValue): obj =
+            let caseInfo = jCaseName |> getUnionCaseInfo path t
+            let casePath = JsonPathItem.Field jCaseName |> path.createNew
+            let props: PropertyInfo array = caseInfo.GetFields()
+            let fieldAttr = getJsonFieldUnionCase caseInfo
+            let values =
+                match props with
+                | [| prop |] ->
+                    [| deserializeUnwrapOption casePath prop.PropertyType fieldAttr (Some jCaseValue) |]
+                | _ ->
+                    let propsTypes = props |> Array.map (fun p -> p.PropertyType)
+                    deserializeTupleElements casePath propsTypes jCaseValue
+            FSharpValue.MakeUnion (caseInfo, values)
+        
+        let deserializeUnion (path: JsonPath) (t: Type) (jvalue: JsonValue): obj =
+            let jsonUnion = t |> getJsonUnion
+            let unionCases = t |> getUnionCases
+            match unionCases with
+            | [| caseInfo |] ->
                 let fieldAttr = getJsonFieldUnionCase caseInfo
                 let props: PropertyInfo array = caseInfo.GetFields()
                 let values =
-                    match props.Length with
-                    | 1 ->
-                        let propType = props.[0].PropertyType
-                        let propValue = deserializeUnwrapOption path propType fieldAttr (Some jvalue)
-                        [| propValue |]
+                    match props with
+                    | [| prop |] ->
+                        [| deserializeUnwrapOption path prop.PropertyType fieldAttr (Some jvalue) |]
                     | _ ->
                         let propsTypes = props |> Array.map (fun p -> p.PropertyType)
                         deserializeTupleElements path propsTypes jvalue
                 FSharpValue.MakeUnion (caseInfo, values)
             | _ ->
                 match jvalue with
+                | JsonValue.String caseName ->
+                    FSharpValue.MakeUnion (caseName |> getUnionCaseInfo path t, null)
                 | JsonValue.Record fields ->
-                    let fieldName, fieldValue =
-                        match jsonUnion.Mode with
-                        | UnionMode.CaseKeyAsFieldName ->
-                            if fields.Length <> 1 then
-                                failDeserialization path <| sprintf "Failed to parse union from record with %i fields, should be 1 field." fields.Length
-                            fields.[0]
-                        | UnionMode.CaseKeyAsFieldValue ->
-                            if fields.Length <> 2 then
-                                failDeserialization path <| sprintf "Failed to parse union from record with %i fields, should be 2 fields." fields.Length
-                            let caseKeyField = fields |> Seq.tryFind (fun f -> fst f = jsonUnion.CaseKeyField)
-                            let caseKeyField =
-                                match caseKeyField with
-                                | Some fieldName -> fieldName
-                                | None -> failDeserialization path <| sprintf "Failed to parse union, unable to find union case field: %s." jsonUnion.CaseKeyField
-                            let caseValueField = fields |> Seq.tryFind (fun f -> fst f = jsonUnion.CaseValueField)
-                            let caseValueField =
-                                match caseValueField with
-                                | Some fieldValue -> fieldValue
-                                | None -> failDeserialization path <| sprintf "Failed to parse union, unable to find union case field value: %s." jsonUnion.CaseValueField
-                            let caseNamePath = caseKeyField |> fst |> JsonPathItem.Field |> path.createNew
-                            let caseName = JsonValueHelpers.getString caseNamePath (snd caseKeyField)
-                            (caseName, snd caseValueField)
-                        | mode -> failDeserialization path <| sprintf "Failed to parse union, unsupported union mode: %A" mode
-                    let casePath = JsonPathItem.Field fieldName |> path.createNew
-                    let caseInfo = unionCases |> Array.tryFind (fun c -> getJsonUnionCaseName config jsonUnion (getJsonUnionCase c) c = fieldName)
-                    let caseInfo =
-                        match caseInfo with
-                        | Some caseInfo -> caseInfo
-                        | None -> failDeserialization path <| sprintf "Failed to parse union, unable to find union case: %s." fieldName
-                    let fieldAttr = getJsonFieldUnionCase caseInfo
-                    let props: PropertyInfo array = caseInfo.GetFields()
-                    let values =
-                        match props.Length with
-                        | 1 ->
-                            let propType = props.[0].PropertyType
-                            let propValue = deserializeUnwrapOption casePath propType fieldAttr (Some fieldValue)
-                            [| propValue |]
+                    match jsonUnion.Mode with
+                    | UnionMode.CaseKeyDiscriminatorField ->
+                        let caseKeyFieldName, caseKeyFieldValue = mustFindField path jsonUnion.CaseKeyField fields
+                        let caseNamePath = caseKeyFieldName |> JsonPathItem.Field |> path.createNew
+                        let jCaseName = caseKeyFieldValue |> JsonValueHelpers.getString caseNamePath
+                        makeUnion path t jCaseName jvalue
+                    | UnionMode.CaseKeyAsFieldValue ->
+                        let caseKeyFieldName, caseKeyFieldValue = mustFindField path jsonUnion.CaseKeyField fields
+                        let _, jCaseValue = mustFindField path jsonUnion.CaseValueField fields
+                        let caseNamePath = caseKeyFieldName |> JsonPathItem.Field |> path.createNew                        
+                        let jCaseName = caseKeyFieldValue |> JsonValueHelpers.getString caseNamePath
+                        makeUnion path t jCaseName jCaseValue
+                    | UnionMode.CaseKeyAsFieldName ->
+                        match fields with
+                        | [| (jCaseName, jCaseValue) |] ->
+                            makeUnion path t jCaseName jCaseValue
                         | _ ->
-                            let propsTypes = props |> Array.map (fun p -> p.PropertyType)
-                            deserializeTupleElements casePath propsTypes fieldValue
-                    FSharpValue.MakeUnion (caseInfo, values)
+                            failDeserialization path $"Failed to parse union from record with %i{fields.Length} fields, should be 1 field."
                 | _ -> failDeserialization path "Failed to parse union from JSON that is not object."
 
         match t with
-        | t when isRecord t -> deserializeRecord path t jvalue
-        | t when isMap t -> deserializeMap path t jvalue
-        | t when isArray t -> deserializeArray path t jvalue
-        | t when isList t -> deserializeList path t jvalue
-        | t when isTuple t -> deserializeTuple path t jvalue
-        | t when isUnion t -> deserializeUnion path t jvalue
-        | _ -> failDeserialization path <| sprintf "Failed to serialize, must be one of following types: record, map, array, list, tuple, union. Type is: %s." t.Name
+        | t when isRecord t -> deserializeRecord path t jValue
+        | t when isMap t -> deserializeMap path t jValue
+        | t when isArray t -> deserializeArray path t jValue
+        | t when isList t -> deserializeList path t jValue
+        | t when isTuple t -> deserializeTuple path t jValue
+        | t when isUnion t -> deserializeUnion path t jValue
+        | _ -> failDeserialization path $"Failed to serialize, must be one of following types: record, map, array, list, tuple, union. Type is: %s{t.Name}."
     

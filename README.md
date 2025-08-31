@@ -48,11 +48,12 @@ printfn "%A" deserialized
       - [Customization of null deserialization](#customization-of-null-deserialization)
       - [Serialization of None](#serialization-of-none)
       - [Customization of None serialization](#customization-of-none-serialization)
-  - [Emums](#emums)
+  - [Enums](#enums)
       - [Customizing enum serialization](#customizing-enum-serialization)
       - [Default enum behaviour](#default-enum-behaviour)
   - [Unions](#unions)
       - [Changing union case key](#changing-union-case-key)
+      - [Union case without fields](#union-case-without-fields)
       - [Single case union](#single-case-union)
       - [Union modes](#union-modes)
   - [Type Transform](#type-transform)
@@ -72,8 +73,9 @@ Why we need yet another F# JSON serialization library?
 Well, if you happy with the library that you are using currently then probably you do not need another one.
 There are several available options to choose from:
 
- * [JSON Type Provider](http://fsharp.github.io/FSharp.Data/library/JsonProvider.html)
+ * [JSON Type Provider](https://fsprojects.github.io/FSharp.Data/library/JsonProvider.html)
  * [Json.Net aka Newtonsoft.Json](https://www.newtonsoft.com/json)
+ * [Fleece](https://github.com/fsprojects/Fleece)
  * [Chiron](https://github.com/xyncro/chiron)
  * [JsonFSharp](https://github.com/PeteProgrammer/JsonFSharp)
  * [Thoth.Json](https://mangelmaxime.github.io/Thoth/json/v2.html#code-sample)
@@ -102,17 +104,17 @@ The [JsonValue type][jsonvalue_type] is internalized in the FSharp.Json library.
 The core of FSharp.Json library is located in single [Core.fs file][core].
 
   [reflection]: https://docs.microsoft.com/en-us/dotnet/framework/reflection-and-codedom/reflection
-  [fsharp_data]: http://fsharp.github.io/FSharp.Data/
-  [jsonvalue_type]: http://fsharp.github.io/FSharp.Data/reference/fsharp-data-jsonvalue.html
-  [core]: https://github.com/vsapronov/FSharp.Json/blob/master/src/FSharp.Json/Core.fs
+  [fsharp_data]: https://fsprojects.github.io/FSharp.Data/
+  [jsonvalue_type]: https://fsprojects.github.io/FSharp.Data/reference/fsharp-data-jsonvalue.html
+  [core]: https://github.com/vsapronov/FSharp.Json/blob/735a312922ef701ef2fcc5379c44d5c483413bae/FSharp.Json/Core.fs
 
 ## Documentation
 
-This document describe all details of FSharp.Json library. The source code also has thorough documentation in comments to main types. Each feature of FSharp.Json is thoroughly covered by [unit tests](tests/FSharp.Json.Tests).
+This document describe all details of FSharp.Json library. The source code also has thorough documentation in comments to main types. Each feature of FSharp.Json is thoroughly covered by [unit tests](FSharp.Json.Tests).
 
 ## API Overview
 
-Most of API functions are defined in [Json module](src/FSharp.Json/Interface.fs).
+Most of API functions are defined in [Json module](FSharp.Json/Interface.fs).
 
 Easiest way to serialize is to call `Json.serialize` function.
 It serializes any supported F# type to string containing JSON.
@@ -128,11 +130,11 @@ Whenever custom configuration should be used following functions are useful:
  * `Json.serializeEx`
  * `Json.deserializeEx<'T>` 
 
-Prefix `Ex` stands for "extended". Both of these functions take [JsonConfig](src/FSharp.Json/InterfaceTypes.fs) instance as a first parameter.
+Prefix `Ex` stands for "extended". Both of these functions take [JsonConfig](FSharp.Json/InterfaceTypes.fs) instance as a first parameter.
 
 #### Configuration
 
-[JsonConfig](src/FSharp.Json/InterfaceTypes.fs) represents global configuration of serialization.
+[JsonConfig](FSharp.Json/InterfaceTypes.fs) represents global configuration of serialization.
 There's convenient way to override default configuration by using `JsonConfig.create` function.
 All parameters of the function are optional and those that are provided override default values.
 
@@ -144,7 +146,7 @@ Some products like [Apache Spark](https://spark.apache.org/) require unformatted
 It is usefull to produce unformatted single line JSON in some other scenarios.
 There is a function to produce unformatted JSON: `Json.serializeU`.
 `U` stands for "unformatted". It has the same signature as `Json.serialize` function.
-The function is a shorthand to using `unformatted` member on [JsonConfig](src/FSharp.Json/InterfaceTypes.fs).
+The function is a shorthand to using `unformatted` member on [JsonConfig](FSharp.Json/InterfaceTypes.fs).
 
 ## Supported Types
 
@@ -158,6 +160,7 @@ char | string
 bool | bool
 DateTime | string according to [ISO 8601](https://en.wikipedia.org/wiki/ISO_8601)<br>number epoch time using [transform](#transform)
 DateTimeOffset | string according to [ISO 8601](https://en.wikipedia.org/wiki/ISO_8601)<br>number epoch time using [transform](#transform)
+TimeSpan | string, example "23:00:10"
 Guid | string
 Uri| string using [transform](#transform)
 Enum | string enum value name<br>number enum value<br>read [Enums](#enums) section
@@ -357,7 +360,7 @@ printfn "%s" json
 // json is: """{}"""
 ```
 
-## Emums
+## Enums
 
 By default enum value is represented as `string` that is enum member name.
 
@@ -388,8 +391,8 @@ let deserialized = Json.deserialize<TheNumberEnum> json
 
 #### Customizing enum serialization
 
-EnumValue member of [JsonField](src/FSharp.Json/InterfaceTypes.fs) attribute could be used to change serialization of enums.
-There are two [modes](src/FSharp.Json/InterfaceTypes.fs) supported currently: enum value name and enum value.
+EnumValue member of [JsonField](FSharp.Json/InterfaceTypes.fs) attribute could be used to change serialization of enums.
+There are two [modes](FSharp.Json/InterfaceTypes.fs) supported currently: enum value name and enum value.
 
 Here's an example of custom enum serialization:
 ```fsharp
@@ -420,7 +423,7 @@ let deserialized = Json.deserialize<TheNumberEnum> json
 
 Sometimes it's needed always serialize enum value as it's value.
 Annotating each member of any enum type would be cumbersome.
-[JsonConfig]() allows to override default enum behaviour.
+[JsonConfig](https://github.com/vsapronov/FSharp.Json/blob/master/FSharp.Json/InterfaceTypes.fs) allows to override default enum behaviour.
 
 Check the example below:
 
@@ -479,7 +482,7 @@ let deserialized = Json.deserialize<TheUnion> json
 
 #### Changing union case key
 
-The string that represents union case key could be changed with [JsonUnionCase attribute](src/FSharp.Json/InterfaceTypes.fs).
+The string that represents union case key could be changed with [JsonUnionCase attribute](FSharp.Json/InterfaceTypes.fs).
 
 See the example below:
 
@@ -531,11 +534,40 @@ let deserialized = Json.deserialize<TheRecord> json
 // deserialized is { TheRecord.value = SingleCase "The string" }
 ```
 
+#### Union case without fields
+
+When union case does not have fields then the union value is represented by string value of the case name itself.
+
+Here's example of serialization union case without fields:
+
+```fsharp
+#r "FSharp.Json.dll"
+open FSharp.Json
+
+// Case NoFieldCase does not have any fields
+type TheUnion =
+| NoFieldCase
+| SingleCase of string
+
+type TheRecord = {
+    // value will be a string represting NoFieldCase
+    value: TheUnion
+}
+
+let data = { TheRecord.value = NoFieldCase }
+
+let json = Json.serialize data
+// json is """{"value":"NoFieldCase"}"""
+
+let deserialized = Json.deserialize<TheRecord> json
+// deserialized is { TheRecord.value = NoFieldCase }
+```
+
 #### Union modes
 
-There's [union mode](src/FSharp.Json/InterfaceTypes.fs) that represents union as JSON object with two fields.
+There's [union mode](FSharp.Json/InterfaceTypes.fs) that represents union as JSON object with two fields.
 One field is for case key and another one is for case value. This mode is called "case key as a field value"
-If this mode is used then names of these two field should be provided through [JsonUnion attribute](src/FSharp.Json/InterfaceTypes.fs).
+If this mode is used then names of these two field should be provided through [JsonUnion attribute](FSharp.Json/InterfaceTypes.fs).
 
 See the example below: 
 
@@ -560,22 +592,22 @@ let deserialized = Json.deserialize<TheUnion> json
 
 ## Type Transform
 
-[Supported types](supported-types) section maps F# types into JSON types.
+[Supported types](#supported-types) section maps F# types into JSON types.
 What if some data needed to be represented as a different type then the default JSON type?
 If changing type of the member in F# is not an option then type transform can help.
 
-Any data member is translated F# Type -> JSON type by [default](supported-types) types mapping.
-[Type Transform](src/FSharp.Json/InterfaceTypes.fs) is applied in the middle of this translation: F# Type -> Alternative F# Type -> JSON type.
+Any data member is translated F# Type -> JSON type by [default](#supported-types) types mapping.
+[Type Transform](FSharp.Json/InterfaceTypes.fs) is applied in the middle of this translation: F# Type -> Alternative F# Type -> JSON type.
 Alternative F# Type -> JSON type is still done by default types mapping, type transform is responsible for F# Type -> Alternative F# Type.
 
-The [Transforms](src/FSharp.Json/Transforms.fs) module contains transforms that are defined by FSharp.Json library.
-You can define your own transforms by implementing [ITypeTransform interface](src/FSharp.Json/InterfaceTypes.fs).
+The [Transforms](FSharp.Json/Transforms.fs) module contains transforms that are defined by FSharp.Json library.
+You can define your own transforms by implementing [ITypeTransform interface](FSharp.Json/InterfaceTypes.fs).
 
 #### DateTime as epoch time
 
 Let's imagine that some DateTime member should be represented as [epoch time](https://en.wikipedia.org/wiki/Unix_time) in JSON.
 Epoch time is int64 however it is still convenient to work with DateTime in F# code.
-In such case [DateTimeEpoch transform](src/FSharp.Json/Transforms.fs) is useful.
+In such case [DateTimeEpoch transform](FSharp.Json/Transforms.fs) is useful.
 
 Here's an example of DateTimeEpoch transform usage:
 
@@ -630,7 +662,7 @@ To be developed....
 
 Using obj type in F# code is bad code smell.
 Though FSharp.Json can serialize and deserialize structures without type information.
-For allowing obj type in serialization/deserialization allowUntyped flag should be set to `true` on [JsonConfig](src/FSharp.Json/InterfaceTypes.fs).
+For allowing obj type in serialization/deserialization allowUntyped flag should be set to `true` on [JsonConfig](FSharp.Json/InterfaceTypes.fs).
 
 #### Serialization of obj
 
@@ -698,7 +730,7 @@ The library is available under Public Domain license, which allows modification 
 redistribution for both commercial and non-commercial purposes. For more information see the 
 [License file][license] in the GitHub repository. 
 
-  [readme]: tree/master/README.md
+  [readme]: README.md 
   [gh]: https://github.com/vsapronov/FSharp.Json
   [issues]: https://github.com/vsapronov/FSharp.Json/issues
   [license]: https://github.com/vsapronov/FSharp.Json/blob/master/LICENSE.txt
